@@ -9,6 +9,7 @@ Route::post('/telegram/webhook', [TelegramBotController::class, 'webhook'])
     ->withoutMiddleware('throttle:api');
 // ->middleware(TelegramSecurityMiddleware::class); // Временно отключено для тестирования
 
-// External API to create notification and trigger broadcast via Observer
+// External API to create/send notifications
 Route::post('/notifications', [NotificationApiController::class, 'store'])
-    ->middleware('security');
+    ->middleware('security')
+    ->withoutMiddleware('throttle:api');

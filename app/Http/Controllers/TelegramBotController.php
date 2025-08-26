@@ -86,7 +86,7 @@ class TelegramBotController extends Controller
         if (isset($update['message'])) {
             $this->processMessage($update['message']);
         }
-        // Здесь можно добавить обработку других типов обновлений (callback_query и т.д.)
+        
     }
 
     /**
@@ -124,6 +124,11 @@ class TelegramBotController extends Controller
                 } else {
                     $this->handleEnableCommand($chatId);
                 }
+                return;
+            }
+            // Кнопка непрочитанных уведомлений
+            if (str_starts_with($text, 'Непрочитанные уведомления')) {
+                $this->handleUnreadNotificationsCommand($chatId, $telegramUser);
                 return;
             }
             // Игнорируем все остальные сообщения
@@ -198,16 +203,9 @@ class TelegramBotController extends Controller
             return;
         }
 
-        // 1. Получаем дату последнего отключения до удаления записи
-        $disable = NotificationDisable::where('user_id', $telegramUser->user_id)->first();
-        $lastDisabled = $disable ? $disable->disabled_at : null;
-
-        // 2. Включаем уведомления
+        // Включаем уведомления
         NotificationDisable::where('user_id', $telegramUser->user_id)->delete();
         $this->sendMainMenuKeyboard($chatId, 'Уведомления включены.');
-
-        // 3. Отправляем все пропущенные уведомления
-        $this->sendMissedNotifications($telegramUser, $chatId, $lastDisabled);
     }
 
 
@@ -230,8 +228,22 @@ class TelegramBotController extends Controller
             return;
         }
 
-        // Use parameterized query instead of whereRaw
-        $user = User::where('name', 'like', $login)->first();
+        // Try to find user by exact name (case-insensitive)
+        $lowerLogin = mb_strtolower($login, 'UTF-8');
+        $user = User::whereRaw('LOWER(name) = ?', [$lowerLogin])->first();
+
+        // Fallback: try to find via TelegramUser.user_login mapping
+        if (!$user) {
+            $map = TelegramUser::whereRaw('LOWER(user_login) = ?', [$lowerLogin])->first();
+            if ($map) {
+                $user = User::find($map->user_id);
+            }
+        }
+
+        // Fallback: partial match
+        if (!$user) {
+            $user = User::where('name', 'like', "%{$login}%")->first();
+        }
 
         if (!$user) {
             SecurityService::incrementBruteForce($chatId, 'auth');
@@ -319,7 +331,7 @@ class TelegramBotController extends Controller
         // Создаем или обновляем связь с Telegram
         TelegramUser::updateOrCreate(
             ['telegram_id' => $chatId],
-            ['user_id' => $user->id]
+            ['user_id' => $user->id, 'user_login' => $state['login']]
         );
 
         Cache::forget($this->getAuthCacheKey($chatId));
@@ -340,8 +352,6 @@ class TelegramBotController extends Controller
         return random_int(self::AUTH_CODE_MIN, self::AUTH_CODE_MAX);
     }
 
-    
-
     private function sendTelegramMessage(int $chatId, string $text): void
     {
         try {
@@ -359,8 +369,6 @@ class TelegramBotController extends Controller
             ]);
         }
     }
-
-    
 
 
 
@@ -399,6 +407,10 @@ class TelegramBotController extends Controller
             if ($telegramUser) {
                 $isDisabled = NotificationDisable::where('user_id', $telegramUser->user_id)->exists();
                 $buttonText = $isDisabled ? 'Включить уведомления' : 'Отключить уведомления';
+                $unreadCount = $this->getUnreadNotificationsCount($telegramUser);
+                $unreadButton = 'Непрочитанные уведомления (' . $unreadCount . ')';
+            } else {
+                $unreadButton = 'Непрочитанные уведомления (0)';
             }
 
             $this->telegram->sendMessage([
@@ -406,7 +418,8 @@ class TelegramBotController extends Controller
                 'text' => $text,
                 'reply_markup' => json_encode([
                     'keyboard' => [
-                        [['text' => $buttonText]]
+                        [['text' => $buttonText]],
+                        [['text' => $unreadButton]]
                     ],
                     'resize_keyboard' => true,
                     'one_time_keyboard' => false,
@@ -460,6 +473,107 @@ class TelegramBotController extends Controller
                 'chat_id' => $chatId,
                 'error' => $e->getMessage()
             ]);
+        }
+    }
+
+    /**
+     * Подсчет количества непрочитанных широковещательных уведомлений для пользователя
+     */
+    private function getUnreadNotificationsCount(TelegramUser $telegramUser): int
+    {
+        try {
+            $chatId = $telegramUser->telegram_id;
+            $sentIds = DB::table('notification_history')
+                ->where('telegram_id', $chatId)
+                ->whereNotNull('sent_at')
+                ->pluck('notification_id')
+                ->toArray();
+
+            $broadcastMissed = Notification::whereNotIn('id', $sentIds)
+                ->where(function ($q) {
+                    if (\Schema::hasColumn('notifications', 'is_broadcast')) {
+                        $q->where('is_broadcast', true);
+                    }
+                })
+                ->count();
+
+            $queuedDirects = DB::table('notification_history')
+                ->where('telegram_id', $chatId)
+                ->whereNull('sent_at')
+                ->count();
+
+            return $broadcastMissed + $queuedDirects;
+        } catch (\Throwable $e) {
+            Log::error('Failed to count unread notifications', [
+                'user_id' => $telegramUser->user_id,
+                'error' => $e->getMessage()
+            ]);
+            return 0;
+        }
+    }
+
+    /**
+     * Обработчик кнопки "Непрочитанные уведомления (N)"
+     */
+    private function handleUnreadNotificationsCommand(int $chatId, TelegramUser $telegramUser): void
+    {
+        try {
+            $sentIds = DB::table('notification_history')
+                ->where('telegram_id', $chatId)
+                ->whereNotNull('sent_at')
+                ->pluck('notification_id')
+                ->toArray();
+
+            // 1) Широковещательные, которых нет в истории (не отправлялись этому чату)
+            $broadcasts = Notification::whereNotIn('id', $sentIds)
+                ->where(function ($q) {
+                    if (\Schema::hasColumn('notifications', 'is_broadcast')) {
+                        $q->where('is_broadcast', true);
+                    }
+                })
+                ->get();
+
+            // 2) Очередь прямых сообщений для этого чата (sent_at IS NULL)
+            $directQueued = DB::table('notification_history')
+                ->where('telegram_id', $chatId)
+                ->whereNull('sent_at')
+                ->pluck('notification_id')
+                ->toArray();
+
+            $directNotifications = Notification::whereIn('id', $directQueued)->get();
+
+            // Объединяем и сортируем по дате создания
+            $all = $broadcasts->concat($directNotifications)->sortBy('created_at')->values();
+
+            if ($all->isEmpty()) {
+                $this->sendMainMenuKeyboard($chatId, 'Нет непрочитанных уведомлений.');
+                return;
+            }
+
+            foreach ($all as $notification) {
+                $createdAt = optional($notification->created_at)->format('d.m.Y H:i');
+                $prefix = $createdAt ? '📅 ' . $createdAt . "\n" : '';
+                $this->sendTelegramMessage($chatId, $prefix . '🔔 ' . $notification->description);
+
+                // Если записи не было — создаём, если была (queued) — проставим sent_at
+                DB::table('notification_history')->updateOrInsert([
+                    'telegram_id' => $chatId,
+                    'notification_id' => $notification->id,
+                ], [
+                    'sent_at' => now(),
+                    'created_at' => now(),
+                    'updated_at' => now(),
+                ]);
+            }
+
+            $this->sendMainMenuKeyboard($chatId, 'Отправлены все непрочитанные уведомления.');
+        } catch (\Throwable $e) {
+            Log::error('Failed to send unread notifications', [
+                'user_id' => $telegramUser->user_id,
+                'chat_id' => $chatId,
+                'error' => $e->getMessage()
+            ]);
+            $this->sendTelegramMessage($chatId, 'Ошибка при отправке непрочитанных уведомлений. Попробуйте позже.');
         }
     }
 

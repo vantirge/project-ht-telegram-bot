@@ -33,34 +33,44 @@ class NotificationObserver
     public function created(Notification $notification)
     {
         try {
-            Log::info('New notification created, sending to users', ['notification_id' => $notification->id]);
+            // Send only broadcast notifications; skip direct notifications
+            if (isset($notification->is_broadcast) && (int)$notification->is_broadcast === 0) {
+                Log::info('Notification is not broadcast, skipping observer send', ['notification_id' => $notification->id]);
+                return;
+            }
+
+            Log::info('New broadcast notification created, sending immediately to enabled users', ['notification_id' => $notification->id]);
 
             // Получаем ID пользователей, отключивших уведомления
             $disabledUserIds = NotificationDisable::pluck('user_id')->toArray();
 
-            // Получаем всех telegram пользователей, кроме отключивших
-            $recipients = TelegramUser::whereNotIn('user_id', $disabledUserIds)->get();
+            // Получаем всех telegram пользователей
+            $recipients = TelegramUser::all();
 
             foreach ($recipients as $telegramUser) {
                 try {
+                    $isDisabled = in_array($telegramUser->user_id, $disabledUserIds);
+                    if ($isDisabled || (bool)($telegramUser->chat_disabled ?? false)) {
+                        // Пользователь с отключёнными уведомлениями: просто появится в "непрочитанных"
+                        // Ничего не делаем здесь
+                        continue;
+                    }
+
                     $this->telegram->sendMessage([
                         'chat_id' => $telegramUser->telegram_id,
                         'text' => "🔔 {$notification->description}"
                     ]);
 
-                    // Записываем в историю отправки
-                    DB::table('notification_history')->insert([
+                    DB::table('notification_history')->updateOrInsert([
                         'telegram_id' => $telegramUser->telegram_id,
                         'notification_id' => $notification->id,
-                        'sent_at' => now()
-                    ]);
-
-                    Log::info('Notification sent successfully', [
-                        'notification_id' => $notification->id,
-                        'telegram_id' => $telegramUser->telegram_id
+                    ], [
+                        'sent_at' => now(),
+                        'created_at' => now(),
+                        'updated_at' => now(),
                     ]);
                 } catch (\Exception $e) {
-                    Log::error('Failed to send notification', [
+                    Log::error('Failed to send broadcast notification', [
                         'notification_id' => $notification->id,
                         'telegram_id' => $telegramUser->telegram_id,
                         'error' => $e->getMessage()

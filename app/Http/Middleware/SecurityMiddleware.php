@@ -19,23 +19,17 @@ class SecurityMiddleware
      */
     public function handle(Request $request, Closure $next)
     {
-        // Protect external integrations by API Key for specific endpoint
-        if ($request->is('api/notifications')) {
-            $provided = $request->header('X-Api-Key');
-            $expected = config('services.external_api.key', env('EXTERNAL_API_KEY'));
-            if (!$expected || $provided !== $expected) {
-                Log::warning('External API key mismatch', ['ip' => $request->ip()]);
-                return response()->json(['message' => 'Unauthorized'], 401);
+        // Rate limiting (skip in local for notifications endpoint to ease testing)
+        $isNotifications = $request->is('api/notifications');
+        $isLocal = app()->environment('local');
+        if (!($isLocal && $isNotifications)) {
+            $key = 'security_' . ($request->ip() ?? 'unknown');
+            if (RateLimiter::tooManyAttempts($key, 60)) { // 60 requests per minute
+                Log::warning('Rate limit exceeded', ['ip' => $request->ip()]);
+                return response()->json(['error' => 'Too many requests'], 429);
             }
+            RateLimiter::hit($key);
         }
-
-        // Rate limiting
-        $key = 'security_' . ($request->ip() ?? 'unknown');
-        if (RateLimiter::tooManyAttempts($key, 60)) { // 60 requests per minute
-            Log::warning('Rate limit exceeded', ['ip' => $request->ip()]);
-            return response()->json(['error' => 'Too many requests'], 429);
-        }
-        RateLimiter::hit($key);
 
         // Sanitize input data
         $this->sanitizeInput($request);
