@@ -318,7 +318,7 @@ class TelegramBotController extends Controller
             return;
         }
 
-        // Check for brute force
+        
         if (SecurityService::checkBruteForce($chatId, 'auth')) {
             $this->sendTelegramMessage($chatId, "Слишком много попыток. Попробуйте позже.");
             return;
@@ -720,13 +720,7 @@ class TelegramBotController extends Controller
      */
     private function validateTelegramRequest(Request $request): bool
     {
-        // В production можно включить проверку User-Agent
-        // $userAgent = $request->userAgent();
-        // if (!$userAgent || !str_contains(strtolower($userAgent), 'telegram')) {
-        //     return false;
-        // }
-
-        // Validate request structure
+        // Проверка структуры запроса
         $data = $request->all();
         if (!isset($data['update_id'])) {
             return false;
