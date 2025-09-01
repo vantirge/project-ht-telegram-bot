@@ -5,7 +5,7 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use App\Models\Notification;
 use App\Models\TelegramUser;
-use App\Models\NotificationDisable;
+
 use Illuminate\Support\Facades\DB;
 
 class SendNewNotifications extends Command
@@ -21,12 +21,14 @@ class SendNewNotifications extends Command
             $this->info('No new notifications to send.');
             return 0;
         }
-        $disabledUserIds = NotificationDisable::pluck('user_id')->toArray();
-        $recipients = TelegramUser::whereNotIn('user_id', $disabledUserIds)->get();
+        $recipients = TelegramUser::where('chat_disabled', false)->get();
         $bot = app(\App\Http\Controllers\TelegramBotController::class);
         foreach ($newNotifications as $notification) {
             foreach ($recipients as $tgUser) {
-                $bot->sendTelegramMessage($tgUser->telegram_id, "🔔 {$notification->description}");
+                $bot->telegram->sendMessage([
+                    'chat_id' => $tgUser->telegram_id,
+                    'text' => "🔔 {$notification->description}"
+                ]);
                 DB::table('notification_history')->insert([
                     'telegram_id' => $tgUser->telegram_id,
                     'notification_id' => $notification->id,

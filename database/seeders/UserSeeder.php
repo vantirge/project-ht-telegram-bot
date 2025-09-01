@@ -10,27 +10,27 @@ class UserSeeder extends Seeder
     public function run()
     {
         User::create([
-            'name' => 'Иван Петров',
+            'name' => 'gen-ini',
             'email' => 'ivan@example.com',
         ]);
 
         User::create([
-            'name' => 'Мария Сидорова',
+            'name' => 'mar-sid',
             'email' => 'maria@example.com',
         ]);
 
         User::create([
-            'name' => 'Алексей Козлов',
+            'name' => 'test-goga',
             'email' => 'goga93571@gmail.com',
         ]);
 
         User::create([
-            'name' => 'Елена Волкова',
+            'name' => 'el-vo',
             'email' => 'elena@example.com',
         ]);
 
         User::create([
-            'name' => 'Дмитрий Соколов',
+            'name' => 'dmit-orl',
             'email' => 'dmitry@example.com',
         ]);
     }

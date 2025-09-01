@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\DB;
 use Telegram\Bot\Api;
 use Telegram\Bot\HttpClients\GuzzleHttpClient;
 use GuzzleHttp\Client as GuzzleClient;
-use App\Models\NotificationDisable;
+
 
 class NotificationApiController extends Controller
 {
@@ -26,6 +26,9 @@ class NotificationApiController extends Controller
         }
         if (!isset($normalized['session_number']) && isset($normalized['session'])) {
             $normalized['session_number'] = $normalized['session'];
+        }
+        if (!isset($normalized['test']) && isset($normalized['test'])) {
+            $normalized['test'] = $normalized['test'];
         }
 
         $request->merge($normalized);
@@ -83,10 +86,9 @@ class NotificationApiController extends Controller
                 ], 404);
             }
 
-            // Respect user-level notification settings
-            $isDisabled = NotificationDisable::where('user_id', $recipient->user_id)->exists();
+            // Проверяем настройки уведомлений пользователя
             $chatDisabled = (bool)($recipient->chat_disabled ?? false);
-            if ($isDisabled || $chatDisabled) {
+            if ($chatDisabled) {
                 // Create notification and queue to history with sent_at = null
                 $notification = Notification::create([
                     'description' => $finalText,
@@ -167,15 +169,32 @@ class NotificationApiController extends Controller
             ? SecurityService::validateInput($data['result'], 'text')
             : null;
 
-        $lines = [
-            "Тест: {$test}",
-            "Номер сессии: {$sessionNumber}",
-            "ФИО: {$fio}",
-        ];
-        if (!empty($result)) {
-            $lines[] = "Результат: {$result}";
+        // Формируем сообщение в новом формате
+        $resultText = !empty($result) ? $result : 'начат';
+        
+        // Если result пустой, используем "начат" как значение по умолчанию
+        if (empty($result)) {
+            $resultText = 'начат';
         }
-        $finalText = implode("\n", $lines);
+        
+        // Преобразуем ФИО в нужный падеж (родительный падеж)
+        $fioParts = explode(' ', trim($fio));
+        if (count($fioParts) >= 3) {
+            $lastName = $fioParts[0];
+            $firstName = $fioParts[1];
+            $middleName = $fioParts[2];
+            
+            // Добавляем окончания для родительного падежа
+            $lastNameGenitive = $this->makeGenitive($lastName);
+            $firstNameGenitive = $this->makeGenitive($firstName);
+            $middleNameGenitive = $this->makeGenitive($middleName);
+            
+            $fioGenitive = "{$lastNameGenitive} {$firstNameGenitive} {$middleNameGenitive}";
+        } else {
+            $fioGenitive = $fio; // Если ФИО не полное, оставляем как есть
+        }
+        
+        $finalText = "В вашем кабинете был {$resultText} тест \"{$test}\" с номером сессии {$sessionNumber}, {$fioGenitive}";
 
         // Find telegram user by login
         $recipient = TelegramUser::where('user_login', $login)->first();
@@ -186,15 +205,13 @@ class NotificationApiController extends Controller
             ], 404);
         }
 
-        // Respect user-level notification settings
-        $isDisabled = NotificationDisable::where('user_id', $recipient->user_id)->exists();
+        // Проверяем настройки уведомлений пользователя
         $chatDisabled = (bool)($recipient->chat_disabled ?? false);
-        if ($isDisabled || $chatDisabled) {
+        if ($chatDisabled) {
             Log::info('Direct notification skipped: notifications are disabled for user', [
                 'login' => $login,
                 'user_id' => $recipient->user_id,
                 'telegram_id' => $recipient->telegram_id,
-                'db_disabled' => $isDisabled,
                 'chat_disabled' => $chatDisabled,
             ]);
 
@@ -276,6 +293,78 @@ class NotificationApiController extends Controller
                 'message' => 'Не удалось отправить сообщение пользователю',
             ], 500);
         }
+    }
+
+    /**
+     * Преобразует имя в родительный падеж
+     */
+    private function makeGenitive(string $name): string
+    {
+        $name = trim($name);
+        
+        // Базовые правила для русских имен
+        $rules = [
+            // Мужские имена
+            'а' => 'ы',    // Иван -> Ивана
+            'й' => 'я',    // Андрей -> Андрея
+            'ь' => 'я',    // Игорь -> Игоря
+            'н' => 'на',   // Иван -> Ивана (если не заканчивается на а)
+            'р' => 'ра',   // Пётр -> Петра
+            'л' => 'ла',   // Михаил -> Михаила
+            'т' => 'та',   // Артём -> Артёма
+            'с' => 'са',   // Денис -> Дениса
+            'в' => 'ва',   // Владислав -> Владислава
+            'д' => 'да',   // Владимир -> Владимира
+            'м' => 'ма',   // Максим -> Максима
+            'г' => 'га',   // Сергей -> Сергея
+            'к' => 'ка',   // Николай -> Николая
+            'х' => 'ха',   // Алексей -> Алексея
+            'ш' => 'ша',   // Павел -> Павла
+            'щ' => 'ща',   // Илья -> Ильи
+            'з' => 'за',   // Борис -> Бориса
+            'ж' => 'жа',   // Виктор -> Виктора
+            'б' => 'ба',   // Роберт -> Роберта
+            'п' => 'па',   // Филипп -> Филиппа
+            'ф' => 'фа',   // Александр -> Александра
+            'ц' => 'ца',   // Евгений -> Евгения
+            'ч' => 'ча',   // Олег -> Олега
+            'э' => 'а',    // Эдуард -> Эдуарда
+            'ю' => 'я',    // Юрий -> Юрия
+            'я' => 'и',    // Ярослав -> Ярослава
+        ];
+        
+        // Женские имена
+        $femaleRules = [
+            'а' => 'ы',    // Мария -> Марии
+            'я' => 'и',    // Анастасия -> Анастасии
+            'ь' => 'и',    // Любовь -> Любови
+            'й' => 'и',    // Наталья -> Натальи
+        ];
+        
+        $lastChar = mb_strtolower(mb_substr($name, -1, 1, 'UTF-8'));
+        
+        // Проверяем мужские правила
+        if (isset($rules[$lastChar])) {
+            return mb_substr($name, 0, -1, 'UTF-8') . $rules[$lastChar];
+        }
+        
+        // Проверяем женские правила
+        if (isset($femaleRules[$lastChar])) {
+            return mb_substr($name, 0, -1, 'UTF-8') . $femaleRules[$lastChar];
+        }
+        
+        // Если правило не найдено, добавляем стандартное окончание
+        if (mb_strlen($name, 'UTF-8') > 2) {
+            $secondLastChar = mb_strtolower(mb_substr($name, -2, 1, 'UTF-8'));
+            
+            // Для имен, заканчивающихся на согласную
+            if (!in_array($secondLastChar, ['а', 'е', 'ё', 'и', 'о', 'у', 'ы', 'э', 'ю', 'я'])) {
+                return $name . 'а';
+            }
+        }
+        
+        // Если ничего не подошло, возвращаем как есть
+        return $name;
     }
 }
 

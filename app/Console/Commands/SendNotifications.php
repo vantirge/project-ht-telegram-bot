@@ -5,7 +5,7 @@ namespace App\Console\Commands;
 use Illuminate\Console\Command;
 use App\Models\Notification;
 use App\Models\TelegramUser;
-use App\Models\NotificationDisable;
+
 use Illuminate\Support\Facades\DB;
 use Telegram\Bot\Api;
 use Telegram\Bot\HttpClients\GuzzleHttpClient;
@@ -39,11 +39,8 @@ class SendNotifications extends Command
     public function handle()
     {
         try {
-            // Получаем ID пользователей, отключивших уведомления
-            $disabledUserIds = NotificationDisable::pluck('user_id')->toArray();
-
-            // Получаем всех telegram пользователей, кроме отключивших
-            $recipients = TelegramUser::whereNotIn('user_id', $disabledUserIds)->get();
+            // Получаем всех telegram пользователей с включенными уведомлениями
+            $recipients = TelegramUser::where('chat_disabled', false)->get();
 
             // Получаем все уведомления, которые еще не отправлены
             $notifications = Notification::whereNotExists(function ($query) {

@@ -14,7 +14,7 @@ use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Log;
 use GuzzleHttp\Client as GuzzleClient;
 use Telegram\Bot\HttpClients\GuzzleHttpClient;
-use App\Models\NotificationDisable;
+
 use App\Models\Notification;
 use App\Services\SecurityService;
 use Throwable;
@@ -86,7 +86,7 @@ class TelegramBotController extends Controller
         if (isset($update['message'])) {
             $this->processMessage($update['message']);
         }
-        
+        // Здесь можно добавить обработку других типов обновлений (callback_query и т.д.)
     }
 
     /**
@@ -94,76 +94,168 @@ class TelegramBotController extends Controller
      */
     private function processMessage(array $message): void
     {
-        $chatId = $message['chat']['id'];
-        $text = trim($message['text'] ?? '');
-
-        // Security validation
-        $text = SecurityService::validateInput($text, 'text');
+        $chatId = $this->extractChatId($message);
+        $text = $this->extractAndValidateText($message);
         
         Log::info('Processing message', ['chat_id' => $chatId, 'text' => $text]);
 
-        // Проверяем, авторизован ли пользователь
-        $telegramUser = TelegramUser::where('telegram_id', $chatId)->first();
-        
-        // Обработка команд (разрешаем для всех пользователей)
+        // Шаг 1: Обработка глобальных команд (доступны всем)
+        if ($this->isGlobalCommand($text)) {
+            $this->handleGlobalCommand($chatId, $text);
+            return;
+        }
+
+        // Шаг 2: Проверка авторизации пользователя
+        $telegramUser = $this->getTelegramUser($chatId);
+
+
+
+        // Шаг 3: Обработка команд авторизованных пользователей
+        if ($telegramUser) {
+            if ($this->handleAuthorizedUserCommand($chatId, $text, $telegramUser)) {
+                return;
+            }
+        }
+
+        // Шаг 4: Обработка команд неавторизованных пользователей
+        if ($this->handleUnauthorizedUserCommand($chatId, $text)) {
+            return;
+        }
+
+
+
+        // Шаг 5: Обработка состояний аутентификации
+        if ($this->handleAuthenticationState($chatId, $text)) {
+            return;
+        }
+
+        // Шаг 6: Отправка приветственного сообщения
+        $this->sendWelcomeMessage($chatId);
+    }
+
+    // --- Вспомогательные методы для processMessage ---
+
+    /**
+     * Извлекает chat_id из сообщения
+     */
+    private function extractChatId(array $message): int
+    {
+        return $message['chat']['id'];
+    }
+
+    /**
+     * Извлекает и валидирует текст сообщения
+     */
+    private function extractAndValidateText(array $message): string
+    {
+        $text = trim($message['text'] ?? '');
+        return SecurityService::validateInput($text, 'text');
+    }
+
+    /**
+     * Проверяет, является ли команда глобальной (доступна всем)
+     */
+    private function isGlobalCommand(string $text): bool
+    {
+        return $text === '/start';
+    }
+
+    /**
+     * Обрабатывает глобальные команды
+     */
+    private function handleGlobalCommand(int $chatId, string $text): void
+    {
         if ($text === '/start') {
             Log::info('Processing /start command');
             $this->handleStartCommand($chatId);
-            return;
+        }
+    }
+
+    /**
+     * Получает пользователя Telegram по chat_id
+     */
+    private function getTelegramUser(int $chatId): ?TelegramUser
+    {
+        return TelegramUser::where('telegram_id', $chatId)->first();
+    }
+
+    /**
+     * Обрабатывает команды авторизованных пользователей
+     * Возвращает true, если команда была обработана
+     */
+    private function handleAuthorizedUserCommand(int $chatId, string $text, TelegramUser $telegramUser): bool
+    {
+        Log::info('User is authorized', ['chat_id' => $chatId]);
+
+        // Обработка команд управления уведомлениями
+        if (in_array($text, ['Отключить уведомления', 'Включить уведомления'])) {
+            Log::info('Processing authorized command', ['text' => $text]);
+            if ($text === 'Отключить уведомления') {
+                $this->handleDisableCommand($chatId);
+            } else {
+                $this->handleEnableCommand($chatId);
+            }
+            return true;
         }
 
-
-
-        if ($telegramUser) {
-            Log::info('User is authorized', ['chat_id' => $chatId]);
-            // Если пользователь авторизован, обрабатываем только разрешенные команды
-            if (in_array($text, ['Отключить уведомления', 'Включить уведомления'])) {
-                Log::info('Processing authorized command', ['text' => $text]);
-                if ($text === 'Отключить уведомления') {
-                    $this->handleDisableCommand($chatId);
-                } else {
-                    $this->handleEnableCommand($chatId);
-                }
-                return;
-            }
-            // Кнопка непрочитанных уведомлений
-            if (str_starts_with($text, 'Непрочитанные уведомления')) {
-                $this->handleUnreadNotificationsCommand($chatId, $telegramUser);
-                return;
-            }
-            // Игнорируем все остальные сообщения
-            Log::info('Ignoring message from authorized user', ['text' => $text]);
-            return;
+        // Обработка кнопки непрочитанных уведомлений
+        if (str_starts_with($text, 'Непрочитанные уведомления')) {
+            Log::info('Processing unread notifications command', ['text' => $text]);
+            $this->handleUnreadNotificationsCommand($chatId, $telegramUser);
+            return true;
         }
 
-        // Обработка команд для неавторизованных пользователей
+        // Игнорируем все остальные сообщения
+        Log::info('Ignoring message from authorized user', ['text' => $text]);
+        return false;
+    }
+
+    /**
+     * Обрабатывает команды неавторизованных пользователей
+     * Возвращает true, если команда была обработана
+     */
+    private function handleUnauthorizedUserCommand(int $chatId, string $text): bool
+    {
         if ($text === '/disable') {
             $this->handleDisableCommand($chatId);
-            return;
+            return true;
         }
 
         if ($text === '/enable') {
             $this->handleEnableCommand($chatId);
-            return;
+            return true;
         }
 
+        return false;
+    }
 
-
-        // Обработка состояний аутентификации
+    /**
+     * Обрабатывает состояния аутентификации
+     * Возвращает true, если состояние было обработано
+     */
+    private function handleAuthenticationState(int $chatId, string $text): bool
+    {
         $cacheKey = $this->getAuthCacheKey($chatId);
         $state = Cache::get($cacheKey, ['stage' => null]);
 
         if ($state['stage'] === 'awaiting_login') {
             $this->handleLoginInput($chatId, $text);
-            return;
+            return true;
         }
 
         if ($state['stage'] === 'awaiting_code') {
             $this->handleCodeInput($chatId, $text, $state);
-            return;
+            return true;
         }
 
-        // Если ни одно условие не сработало, отправляем приветствие
+        return false;
+    }
+
+    /**
+     * Отправляет приветственное сообщение
+     */
+    private function sendWelcomeMessage(int $chatId): void
+    {
         $this->sendTelegramMessage($chatId, 'Добро пожаловать! Используйте команду /start для начала.');
     }
 
@@ -177,6 +269,9 @@ class TelegramBotController extends Controller
 
 
 
+    /**
+     * Отключает уведомления для текущего чата пользователя
+     */
     private function handleDisableCommand(int $chatId): void
     {
         $telegramUser = TelegramUser::where('telegram_id', $chatId)->first();
@@ -186,14 +281,15 @@ class TelegramBotController extends Controller
             return;
         }
 
-        NotificationDisable::updateOrCreate(
-            ['user_id' => $telegramUser->user_id],
-            ['disabled_at' => now()]
-        );
+        // Отключаем уведомления для текущего чата
+        $telegramUser->update(['chat_disabled' => true]);
 
         $this->sendMainMenuKeyboard($chatId, 'Уведомления отключены.');
     }
 
+    /**
+     * Включает уведомления для текущего чата пользователя
+     */
     private function handleEnableCommand(int $chatId): void
     {
         $telegramUser = TelegramUser::where('telegram_id', $chatId)->first();
@@ -203,8 +299,8 @@ class TelegramBotController extends Controller
             return;
         }
 
-        // Включаем уведомления
-        NotificationDisable::where('user_id', $telegramUser->user_id)->delete();
+        // Включаем уведомления для текущего чата
+        $telegramUser->update(['chat_disabled' => false]);
         $this->sendMainMenuKeyboard($chatId, 'Уведомления включены.');
     }
 
@@ -240,9 +336,10 @@ class TelegramBotController extends Controller
             }
         }
 
-        // Fallback: partial match
+        // Fallback: try exact match with common variations
         if (!$user) {
-            $user = User::where('name', 'like', "%{$login}%")->first();
+            $loginVariations = $this->generateLoginVariations($login);
+            $user = User::whereIn('name', $loginVariations)->first();
         }
 
         if (!$user) {
@@ -319,7 +416,8 @@ class TelegramBotController extends Controller
         if (!$user) {
             // fallback на поиск по имени, если ID не сохранился
             $login = SecurityService::validateInput($state['login'], 'login');
-            $user = User::where('name', 'like', $login)->first();
+            $lowerLogin = mb_strtolower($login, 'UTF-8');
+            $user = User::whereRaw('LOWER(name) = ?', [$lowerLogin])->first();
         }
 
         if (!$user) {
@@ -338,178 +436,6 @@ class TelegramBotController extends Controller
 
         // Показываем кнопку управления уведомлениями
         $this->sendMainMenuKeyboard($chatId, 'Вы успешно авторизованы!');
-    }
-
-    // --- Вспомогательные методы ---
-
-    private function getAuthCacheKey(int $chatId): string
-    {
-        return 'tg_auth_' . $chatId;
-    }
-
-    private function generateAuthCode(): int
-    {
-        return random_int(self::AUTH_CODE_MIN, self::AUTH_CODE_MAX);
-    }
-
-    private function sendTelegramMessage(int $chatId, string $text): void
-    {
-        try {
-            Log::info('Sending Telegram message', ['chat_id' => $chatId, 'text' => $text]);
-            $this->telegram->sendMessage([
-                'chat_id' => $chatId,
-                'text' => $text
-            ]);
-            Log::info('Telegram message sent successfully', ['chat_id' => $chatId]);
-        } catch (Throwable $e) {
-            Log::error('Failed to send Telegram message', [
-                'chat_id' => $chatId,
-                'text' => $text,
-                'error' => $e->getMessage()
-            ]);
-        }
-    }
-
-
-
-    private function sendMenuReplyKeyboard(int $chatId, string $text, string $buttonText): void
-    {
-        try {
-            $this->telegram->sendMessage([
-                'chat_id' => $chatId,
-                'text' => $text,
-                'reply_markup' => json_encode([
-                    'keyboard' => [
-                        [['text' => $buttonText]]
-                    ],
-                    'resize_keyboard' => true,
-                    'one_time_keyboard' => false,
-                ])
-            ]);
-        } catch (Throwable $e) {
-            Log::error('Failed to send menu with reply keyboard', [
-                'chat_id' => $chatId,
-                'text' => $text,
-                'error' => $e->getMessage()
-            ]);
-            // Отправляем сообщение без клавиатуры в случае ошибки
-            $this->sendTelegramMessage($chatId, $text);
-        }
-    }
-
-    private function sendMainMenuKeyboard(int $chatId, string $text): void
-    {
-        try {
-            // Определяем текст кнопки в зависимости от статуса уведомлений
-            $telegramUser = TelegramUser::where('telegram_id', $chatId)->first();
-            $buttonText = 'Отключить уведомления';
-            
-            if ($telegramUser) {
-                $isDisabled = NotificationDisable::where('user_id', $telegramUser->user_id)->exists();
-                $buttonText = $isDisabled ? 'Включить уведомления' : 'Отключить уведомления';
-                $unreadCount = $this->getUnreadNotificationsCount($telegramUser);
-                $unreadButton = 'Непрочитанные уведомления (' . $unreadCount . ')';
-            } else {
-                $unreadButton = 'Непрочитанные уведомления (0)';
-            }
-
-            $this->telegram->sendMessage([
-                'chat_id' => $chatId,
-                'text' => $text,
-                'reply_markup' => json_encode([
-                    'keyboard' => [
-                        [['text' => $buttonText]],
-                        [['text' => $unreadButton]]
-                    ],
-                    'resize_keyboard' => true,
-                    'one_time_keyboard' => false,
-                ])
-            ]);
-        } catch (Throwable $e) {
-            Log::error('Failed to send main menu keyboard', [
-                'chat_id' => $chatId,
-                'text' => $text,
-                'error' => $e->getMessage()
-            ]);
-            // Отправляем сообщение без клавиатуры в случае ошибки
-            $this->sendTelegramMessage($chatId, $text);
-        }
-    }
-
-    /**
-     * Отправка пропущенных уведомлений пользователю
-     */
-    private function sendMissedNotifications(TelegramUser $telegramUser, int $chatId, ?string $lastDisabled): void
-    {
-        try {
-            // Если пользователь никогда не отключал уведомления — берём дату создания записи TelegramUser
-            if (!$lastDisabled) {
-                $lastDisabled = $telegramUser->created_at;
-            }
-
-            // Получаем ID уже отправленных уведомлений этому пользователю
-            $sentIds = DB::table('notification_history')
-                ->where('telegram_id', $chatId)
-                ->pluck('notification_id')
-                ->toArray();
-
-            // Получаем все уведомления, созданные после отключения/регистрации и ещё не отправленные
-            $notifications = Notification::where('created_at', '>=', $lastDisabled)
-                ->whereNotIn('id', $sentIds)
-                ->get();
-
-            foreach ($notifications as $notification) {
-                $this->sendTelegramMessage($chatId, "🔔 {$notification->description}");
-
-                DB::table('notification_history')->upsert([
-                    'telegram_id' => $chatId,
-                    'notification_id' => $notification->id,
-                    'sent_at' => now()
-                ], ['telegram_id', 'notification_id'], ['sent_at']);
-            }
-        } catch (Throwable $e) {
-            Log::error('Error sending missed notifications', [
-                'user_id' => $telegramUser->user_id,
-                'chat_id' => $chatId,
-                'error' => $e->getMessage()
-            ]);
-        }
-    }
-
-    /**
-     * Подсчет количества непрочитанных широковещательных уведомлений для пользователя
-     */
-    private function getUnreadNotificationsCount(TelegramUser $telegramUser): int
-    {
-        try {
-            $chatId = $telegramUser->telegram_id;
-            $sentIds = DB::table('notification_history')
-                ->where('telegram_id', $chatId)
-                ->whereNotNull('sent_at')
-                ->pluck('notification_id')
-                ->toArray();
-
-            $broadcastMissed = Notification::whereNotIn('id', $sentIds)
-                ->where(function ($q) {
-                    if (\Schema::hasColumn('notifications', 'is_broadcast')) {
-                        $q->where('is_broadcast', true);
-                    }
-                })
-                ->count();
-
-            $queuedDirects = DB::table('notification_history')
-                ->where('telegram_id', $chatId)
-                ->whereNull('sent_at')
-                ->count();
-
-            return $broadcastMissed + $queuedDirects;
-        } catch (\Throwable $e) {
-            Log::error('Failed to count unread notifications', [
-                'user_id' => $telegramUser->user_id,
-                'error' => $e->getMessage()
-            ]);
-            return 0;
-        }
     }
 
     /**
@@ -578,6 +504,218 @@ class TelegramBotController extends Controller
     }
 
     /**
+     * Подсчет количества непрочитанных широковещательных уведомлений для пользователя
+     */
+    private function getUnreadNotificationsCount(TelegramUser $telegramUser): int
+    {
+        try {
+            $chatId = $telegramUser->telegram_id;
+            $sentIds = DB::table('notification_history')
+                ->where('telegram_id', $chatId)
+                ->whereNotNull('sent_at')
+                ->pluck('notification_id')
+                ->toArray();
+
+            $broadcastMissed = Notification::whereNotIn('id', $sentIds)
+                ->where(function ($q) {
+                    if (\Schema::hasColumn('notifications', 'is_broadcast')) {
+                        $q->where('is_broadcast', true);
+                    }
+                })
+                ->count();
+
+            $queuedDirects = DB::table('notification_history')
+                ->where('telegram_id', $chatId)
+                ->whereNull('sent_at')
+                ->count();
+
+            return $broadcastMissed + $queuedDirects;
+        } catch (\Throwable $e) {
+            Log::error('Failed to count unread notifications', [
+                'user_id' => $telegramUser->user_id,
+                'error' => $e->getMessage()
+            ]);
+            return 0;
+        }
+    }
+
+    /**
+     * Генерирует варианты логина для более точного поиска
+     */
+    private function generateLoginVariations(string $login): array
+    {
+        $variations = [
+            $login,
+            trim($login),
+            str_replace(' ', '', $login),
+            str_replace('-', '', $login),
+            str_replace('_', '', $login),
+            str_replace('.', '', $login),
+            strtolower($login),
+            strtoupper($login),
+            ucfirst(strtolower($login)),
+            ucwords(strtolower($login))
+        ];
+
+        // Добавляем варианты с заменой символов
+        $variations[] = str_replace(['-', '_', '.'], '', $login);
+        $variations[] = str_replace(['-', '_', '.', ' '], '', $login);
+        
+        // Добавляем варианты с пробелами
+        if (strpos($login, ' ') === false) {
+            // Если нет пробелов, добавляем варианты с пробелами
+            $variations[] = str_replace(['-', '_'], ' ', $login);
+        }
+
+        // Удаляем дубликаты и пустые значения
+        return array_unique(array_filter($variations));
+    }
+
+    // --- Вспомогательные методы ---
+
+    private function getAuthCacheKey(int $chatId): string
+    {
+        return 'tg_auth_' . $chatId;
+    }
+
+    private function generateAuthCode(): int
+    {
+        return random_int(self::AUTH_CODE_MIN, self::AUTH_CODE_MAX);
+    }
+
+    private function sendTelegramMessage(int $chatId, string $text): void
+    {
+        try {
+            Log::info('Sending Telegram message', ['chat_id' => $chatId, 'text' => $text]);
+            $this->telegram->sendMessage([
+                'chat_id' => $chatId,
+                'text' => $text
+            ]);
+            Log::info('Telegram message sent successfully', ['chat_id' => $chatId]);
+        } catch (Throwable $e) {
+            Log::error('Failed to send Telegram message', [
+                'chat_id' => $chatId,
+                'text' => $text,
+                'error' => $e->getMessage()
+            ]);
+        }
+    }
+
+
+
+    private function sendMenuReplyKeyboard(int $chatId, string $text, string $buttonText): void
+    {
+        try {
+            $this->telegram->sendMessage([
+                'chat_id' => $chatId,
+                'text' => $text,
+                'reply_markup' => json_encode([
+                    'keyboard' => [
+                        [['text' => $buttonText]]
+                    ],
+                    'resize_keyboard' => true,
+                    'one_time_keyboard' => false,
+                ])
+            ]);
+        } catch (Throwable $e) {
+            Log::error('Failed to send menu with reply keyboard', [
+                'chat_id' => $chatId,
+                'text' => $text,
+                'error' => $e->getMessage()
+            ]);
+            // Отправляем сообщение без клавиатуры в случае ошибки
+            $this->sendTelegramMessage($chatId, $text);
+        }
+    }
+
+    private function sendMainMenuKeyboard(int $chatId, string $text): void
+    {
+        try {
+            // Определяем текст кнопки в зависимости от статуса уведомлений
+            $telegramUser = TelegramUser::where('telegram_id', $chatId)->first();
+            $buttonText = 'Отключить уведомления';
+            
+            $keyboard = [];
+            
+            if ($telegramUser) {
+                $chatDisabled = (bool)($telegramUser->chat_disabled ?? false);
+                $buttonText = $chatDisabled ? 'Включить уведомления' : 'Отключить уведомления';
+                $unreadCount = $this->getUnreadNotificationsCount($telegramUser);
+                
+                // Сначала добавляем кнопку управления уведомлениями
+                $keyboard[] = [['text' => $buttonText]];
+                
+                // Показываем кнопку непрочитанных сообщений только если есть непрочитанные
+                if ($unreadCount > 0) {
+                    $unreadButton = 'Непрочитанные уведомления (' . $unreadCount . ')';
+                    $keyboard[] = [['text' => $unreadButton]];
+                }
+            } else {
+                // Для неавторизованных пользователей показываем только кнопку управления
+                $keyboard[] = [['text' => $buttonText]];
+            }
+
+            $this->telegram->sendMessage([
+                'chat_id' => $chatId,
+                'text' => $text,
+                'reply_markup' => json_encode([
+                    'keyboard' => $keyboard,
+                    'resize_keyboard' => true,
+                    'one_time_keyboard' => false,
+                ])
+            ]);
+        } catch (Throwable $e) {
+            Log::error('Failed to send main menu keyboard', [
+                'chat_id' => $chatId,
+                'text' => $text,
+                'error' => $e->getMessage()
+            ]);
+            // Отправляем сообщение без клавиатуры в случае ошибки
+            $this->sendTelegramMessage($chatId, $text);
+        }
+    }
+
+    /**
+     * Отправка пропущенных уведомлений пользователю
+     */
+    private function sendMissedNotifications(TelegramUser $telegramUser, int $chatId, ?string $lastDisabled): void
+    {
+        try {
+            // Если пользователь никогда не отключал уведомления — берём дату создания записи TelegramUser
+            if (!$lastDisabled) {
+                $lastDisabled = $telegramUser->created_at;
+            }
+
+            // Получаем ID уже отправленных уведомлений этому пользователю
+            $sentIds = DB::table('notification_history')
+                ->where('telegram_id', $chatId)
+                ->pluck('notification_id')
+                ->toArray();
+
+            // Получаем все уведомления, созданные после отключения/регистрации и ещё не отправленные
+            $notifications = Notification::where('created_at', '>=', $lastDisabled)
+                ->whereNotIn('id', $sentIds)
+                ->get();
+
+            foreach ($notifications as $notification) {
+                $this->sendTelegramMessage($chatId, "🔔 {$notification->description}");
+
+                DB::table('notification_history')->upsert([
+                    'telegram_id' => $chatId,
+                    'notification_id' => $notification->id,
+                    'sent_at' => now()
+                ], ['telegram_id', 'notification_id'], ['sent_at']);
+            }
+        } catch (Throwable $e) {
+            Log::error('Error sending missed notifications', [
+                'user_id' => $telegramUser->user_id,
+                'chat_id' => $chatId,
+                'error' => $e->getMessage()
+            ]);
+        }
+    }
+
+    /**
      * Validate Telegram webhook request
      */
     private function validateTelegramRequest(Request $request): bool
@@ -624,11 +762,8 @@ class TelegramBotController extends Controller
                 return;
             }
 
-            // Получаем ID пользователей, отключивших уведомления
-            $disabledUserIds = NotificationDisable::pluck('user_id')->toArray();
-
-            // Получаем всех telegram пользователей, кроме отключивших
-            $recipients = TelegramUser::whereNotIn('user_id', $disabledUserIds)->get();
+            // Получаем всех telegram пользователей с включенными уведомлениями
+            $recipients = TelegramUser::where('chat_disabled', false)->get();
 
             foreach ($recipients as $telegramUser) {
                 // Проверяем, не отправляли ли мы это уведомление ранее

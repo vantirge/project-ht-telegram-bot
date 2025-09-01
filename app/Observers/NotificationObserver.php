@@ -4,7 +4,7 @@ namespace App\Observers;
 
 use App\Models\Notification;
 use App\Models\TelegramUser;
-use App\Models\NotificationDisable;
+
 use Illuminate\Support\Facades\DB;
 use Telegram\Bot\Api;
 use Telegram\Bot\HttpClients\GuzzleHttpClient;
@@ -41,16 +41,13 @@ class NotificationObserver
 
             Log::info('New broadcast notification created, sending immediately to enabled users', ['notification_id' => $notification->id]);
 
-            // Получаем ID пользователей, отключивших уведомления
-            $disabledUserIds = NotificationDisable::pluck('user_id')->toArray();
-
             // Получаем всех telegram пользователей
             $recipients = TelegramUser::all();
 
             foreach ($recipients as $telegramUser) {
                 try {
-                    $isDisabled = in_array($telegramUser->user_id, $disabledUserIds);
-                    if ($isDisabled || (bool)($telegramUser->chat_disabled ?? false)) {
+                    // Проверяем только флаг чата
+                    if ((bool)($telegramUser->chat_disabled ?? false)) {
                         // Пользователь с отключёнными уведомлениями: просто появится в "непрочитанных"
                         // Ничего не делаем здесь
                         continue;
