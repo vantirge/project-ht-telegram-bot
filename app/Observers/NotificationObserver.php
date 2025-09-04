@@ -33,13 +33,13 @@ class NotificationObserver
     public function created(Notification $notification)
     {
         try {
-            // Send only broadcast notifications; skip direct notifications
+            // Отправляем только широковещательные уведомления; прямые пропускаем
             if (isset($notification->is_broadcast) && (int)$notification->is_broadcast === 0) {
-                Log::info('Notification is not broadcast, skipping observer send', ['notification_id' => $notification->id]);
+                Log::info('Уведомление не является широковещательным, отправка наблюдателем пропущена', ['notification_id' => $notification->id]);
                 return;
             }
 
-            Log::info('New broadcast notification created, sending immediately to enabled users', ['notification_id' => $notification->id]);
+            Log::info('Создано новое широковещательное уведомление, отправляем сразу пользователям с включенными уведомлениями', ['notification_id' => $notification->id]);
 
             // Получаем всех telegram пользователей
             $recipients = TelegramUser::all();

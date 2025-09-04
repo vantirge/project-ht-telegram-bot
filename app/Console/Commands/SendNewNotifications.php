@@ -11,14 +11,14 @@ use Illuminate\Support\Facades\DB;
 class SendNewNotifications extends Command
 {
     protected $signature = 'notifications:send-new';
-    protected $description = 'Send new notifications to all users except those who disabled them';
+    protected $description = 'Отправить новые уведомления всем пользователям, кроме отключивших уведомления';
 
     public function handle()
     {
-        // Добавим поле sent_at, если его нет, или ищем по истории
+        // Добавим поле sent_at, если его нет, иначе ищем по истории
         $newNotifications = Notification::whereNull('sent_at')->get();
         if ($newNotifications->isEmpty()) {
-            $this->info('No new notifications to send.');
+            $this->info('Нет новых уведомлений для отправки.');
             return 0;
         }
         $recipients = TelegramUser::where('chat_disabled', false)->get();

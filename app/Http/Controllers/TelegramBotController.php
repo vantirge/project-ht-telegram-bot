@@ -22,7 +22,7 @@ use Throwable;
 class TelegramBotController extends Controller
 {
     protected Api $telegram;
-    private const CACHE_TTL = 600; // 10 minutes
+    private const CACHE_TTL = 600; // 10 минут
     private const AUTH_CODE_LENGTH = 6;
     private const AUTH_CODE_MIN = 100000;
     private const AUTH_CODE_MAX = 999999;
@@ -55,7 +55,7 @@ class TelegramBotController extends Controller
                 'data' => $request->all()
             ]);
 
-            // Security validation
+            // Проверка безопасности запроса
             if (!$this->validateTelegramRequest($request)) {
                 SecurityService::logSecurityEvent('Invalid Telegram request', [
                     'ip' => $request->ip(),
@@ -310,7 +310,7 @@ class TelegramBotController extends Controller
 
     private function handleLoginInput(int $chatId, string $login): void
     {
-        // Security validation
+        // Проверка входных данных (безопасность)
         $login = SecurityService::validateInput($login, 'login');
         
         if (empty($login)) {
@@ -324,11 +324,11 @@ class TelegramBotController extends Controller
             return;
         }
 
-        // Try to find user by exact name (case-insensitive)
+        // Ищем пользователя по точному совпадению имени (без учета регистра)
         $lowerLogin = mb_strtolower($login, 'UTF-8');
         $user = User::whereRaw('LOWER(name) = ?', [$lowerLogin])->first();
 
-        // Fallback: try to find via TelegramUser.user_login mapping
+        // Резервный вариант: ищем через маппинг TelegramUser.user_login
         if (!$user) {
             $map = TelegramUser::whereRaw('LOWER(user_login) = ?', [$lowerLogin])->first();
             if ($map) {
@@ -336,11 +336,7 @@ class TelegramBotController extends Controller
             }
         }
 
-        // Fallback: try exact match with common variations
-        if (!$user) {
-            $loginVariations = $this->generateLoginVariations($login);
-            $user = User::whereIn('name', $loginVariations)->first();
-        }
+        // Убираем нечеткий поиск: оставляем только строгие варианты
 
         if (!$user) {
             SecurityService::incrementBruteForce($chatId, 'auth');
@@ -387,7 +383,7 @@ class TelegramBotController extends Controller
 
     private function handleCodeInput(int $chatId, string $inputCode, array $state): void
     {
-        // Security validation
+        // Проверка входных данных (безопасность)
         $inputCode = SecurityService::validateInput($inputCode, 'code');
         
         if (!isset($state['code']) || !isset($state['login'])) {
@@ -396,7 +392,7 @@ class TelegramBotController extends Controller
             return;
         }
 
-        // Check for brute force
+        // Проверка на брутфорс
         if (SecurityService::checkBruteForce($chatId, 'code')) {
             $this->sendTelegramMessage($chatId, "Слишком много попыток. Попробуйте позже.");
             return;
@@ -426,7 +422,7 @@ class TelegramBotController extends Controller
             return;
         }
 
-        // Создаем или обновляем связь с Telegram
+        // Создаём или обновляем связь с Telegram
         TelegramUser::updateOrCreate(
             ['telegram_id' => $chatId],
             ['user_id' => $user->id, 'user_login' => $state['login']]
@@ -539,37 +535,7 @@ class TelegramBotController extends Controller
         }
     }
 
-    /**
-     * Генерирует варианты логина для более точного поиска
-     */
-    private function generateLoginVariations(string $login): array
-    {
-        $variations = [
-            $login,
-            trim($login),
-            str_replace(' ', '', $login),
-            str_replace('-', '', $login),
-            str_replace('_', '', $login),
-            str_replace('.', '', $login),
-            strtolower($login),
-            strtoupper($login),
-            ucfirst(strtolower($login)),
-            ucwords(strtolower($login))
-        ];
-
-        // Добавляем варианты с заменой символов
-        $variations[] = str_replace(['-', '_', '.'], '', $login);
-        $variations[] = str_replace(['-', '_', '.', ' '], '', $login);
-        
-        // Добавляем варианты с пробелами
-        if (strpos($login, ' ') === false) {
-            // Если нет пробелов, добавляем варианты с пробелами
-            $variations[] = str_replace(['-', '_'], ' ', $login);
-        }
-
-        // Удаляем дубликаты и пустые значения
-        return array_unique(array_filter($variations));
-    }
+    
 
     // --- Вспомогательные методы ---
 
@@ -716,7 +682,7 @@ class TelegramBotController extends Controller
     }
 
     /**
-     * Validate Telegram webhook request
+     * Валидирует запрос вебхука Telegram
      */
     private function validateTelegramRequest(Request $request): bool
     {

@@ -11,7 +11,7 @@ use Illuminate\Support\Str;
 class SecurityMiddleware
 {
     /**
-     * Handle an incoming request.
+     * Обрабатывает входящий HTTP-запрос.
      *
      * @param  \Illuminate\Http\Request  $request
      * @param  \Closure(\Illuminate\Http\Request): (\Illuminate\Http\Response|\Illuminate\Http\RedirectResponse)  $next
@@ -19,29 +19,29 @@ class SecurityMiddleware
      */
     public function handle(Request $request, Closure $next)
     {
-        // Rate limiting (skip in local for notifications endpoint to ease testing)
+        // Лимитирование запросов (в локальном окружении для /api/notifications пропускаем для удобства тестирования)
         $isNotifications = $request->is('api/notifications');
         $isLocal = app()->environment('local');
         if (!($isLocal && $isNotifications)) {
             $key = 'security_' . ($request->ip() ?? 'unknown');
-            if (RateLimiter::tooManyAttempts($key, 60)) { // 60 requests per minute
-                Log::warning('Rate limit exceeded', ['ip' => $request->ip()]);
-                return response()->json(['error' => 'Too many requests'], 429);
+            if (RateLimiter::tooManyAttempts($key, 60)) { // 60 запросов в минуту
+                Log::warning('Превышен лимит запросов', ['ip' => $request->ip()]);
+                return response()->json(['error' => 'Слишком много запросов'], 429);
             }
             RateLimiter::hit($key);
         }
 
-        // Sanitize input data
+        // Санитизируем входные данные
         $this->sanitizeInput($request);
 
-        // Log suspicious activities
+        // Логируем подозрительную активность
         $this->logSuspiciousActivity($request);
 
         return $next($request);
     }
 
     /**
-     * Sanitize input data to prevent SQL injection and XSS
+     * Санитизирует входные данные для предотвращения SQL-инъекций и XSS
      */
     private function sanitizeInput(Request $request): void
     {
@@ -50,7 +50,7 @@ class SecurityMiddleware
 
         foreach ($input as $key => $value) {
             if (is_string($value)) {
-                // Remove potentially dangerous characters
+                // Удаляем потенциально опасные символы
                 $value = $this->sanitizeString($value);
             }
             $sanitized[$key] = $value;
@@ -60,24 +60,24 @@ class SecurityMiddleware
     }
 
     /**
-     * Sanitize string input
+     * Санитизирует строковый ввод
      */
     private function sanitizeString(string $input): string
     {
-        // Для Telegram webhook не применяем агрессивную санитизацию
+        // Для Telegram webhook не применяем агрессивную санитизацию,
         // так как это может нарушить работу бота
         
-        // Remove null bytes
+        // Удаляем нулевые байты
         $input = str_replace("\0", '', $input);
         
-        // Trim whitespace
+        // Обрезаем пробелы по краям
         $input = trim($input);
         
         return $input;
     }
 
     /**
-     * Log suspicious activities
+     * Логирует подозрительную активность
      */
     private function logSuspiciousActivity(Request $request): void
     {

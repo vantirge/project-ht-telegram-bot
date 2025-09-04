@@ -9,14 +9,14 @@ use Illuminate\Support\Str;
 class SecurityService
 {
     /**
-     * Validate and sanitize user input
+     * Валидирует и санитизирует пользовательский ввод
      */
     public static function validateInput(string $input, string $type = 'general'): string
     {
-        // Remove dangerous characters
+        // Удаляем опасные символы
         $input = self::removeDangerousChars($input);
         
-        // Type-specific validation
+        // Валидация с учётом типа
         switch ($type) {
             case 'login':
                 return self::validateLogin($input);
@@ -30,23 +30,23 @@ class SecurityService
     }
 
     /**
-     * Remove dangerous characters
+     * Удаляет опасные символы
      */
     private static function removeDangerousChars(string $input): string
     {
-        // SQL injection patterns
+        // Шаблоны для SQL-инъекций
         $sqlPatterns = [
             '/\b(union|select|insert|update|delete|drop|create|alter|exec|execute|declare|cast|convert|char|nchar|varchar|nvarchar)\b/i',
-            '/[\'";\\\]/', // Remove quotes and semicolons
-            '/--/', // Remove SQL comments
-            '/\/\*.*?\*\//s', // Remove SQL block comments
-            '/xp_/', // Remove extended stored procedures
-            '/sp_/', // Remove stored procedures
+            '/[\'";\\\]/', // Удаляем кавычки и точку с запятой
+            '/--/', // Удаляем SQL-комментарии
+            '/\/\*.*?\*\//s', // Удаляем блочные SQL-комментарии
+            '/xp_/', // Удаляем расширенные хранимые процедуры
+            '/sp_/', // Удаляем хранимые процедуры
         ];
 
         $input = preg_replace($sqlPatterns, '', $input);
         
-        // XSS patterns
+        // Шаблоны для XSS
         $xssPatterns = [
             '/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/mi',
             '/javascript:/i',
@@ -62,26 +62,26 @@ class SecurityService
 
         $input = preg_replace($xssPatterns, '', $input);
         
-        // Remove null bytes and control characters
+        // Удаляем нулевые байты и управляющие символы
         $input = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $input);
         
         return trim($input);
     }
 
     /**
-     * Validate login input
+     * Валидирует логин
      */
     private static function validateLogin(string $input): string
     {
-        // Allow Unicode letters/numbers, spaces, dots, hyphens, and underscores
-        // This preserves names with Cyrillic and spaces like "Алексей Козлов"
+        // Разрешаем буквы/цифры Юникод, пробелы, точки, дефисы и подчёркивания
+        // Сохраняет имена на кириллице и с пробелами, например: "Алексей Козлов"
         $input = preg_replace('/[^\p{L}\p{N}\s._-]/u', '', $input);
 
-        // Collapse multiple spaces and trim
+        // Схлопываем множественные пробелы и обрезаем края
         $input = preg_replace('/\s+/u', ' ', $input);
         $input = trim($input);
 
-        // Limit length (multibyte-safe)
+        // Ограничиваем длину (корректно для мультибайта)
         if (mb_strlen($input, 'UTF-8') > 50) {
             $input = mb_substr($input, 0, 50, 'UTF-8');
         }
@@ -90,14 +90,14 @@ class SecurityService
     }
 
     /**
-     * Validate code input
+     * Валидирует код подтверждения
      */
     private static function validateCode(string $input): string
     {
-        // Only allow digits
+        // Разрешаем только цифры
         $input = preg_replace('/[^0-9]/', '', $input);
         
-        // Limit length to 6 digits
+        // Ограничиваем длину 6 символами
         if (strlen($input) > 6) {
             $input = substr($input, 0, 6);
         }
@@ -106,17 +106,17 @@ class SecurityService
     }
 
     /**
-     * Validate text input
+     * Валидирует текст
      */
     private static function validateText(string $input): string
     {
-        // Для Telegram не применяем HTML-кодирование, так как это может нарушить работу бота
+        // Для Telegram не применяем HTML-кодирование, чтобы не нарушить работу бота
         // Только ограничиваем длину и удаляем опасные символы
         
-        // Remove null bytes and control characters
+        // Удаляем нулевые байты и управляющие символы
         $input = preg_replace('/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/', '', $input);
         
-        // Limit length
+        // Ограничиваем длину
         if (strlen($input) > 1000) {
             $input = substr($input, 0, 1000);
         }
@@ -125,14 +125,14 @@ class SecurityService
     }
 
     /**
-     * Validate general input
+     * Валидирует общий ввод
      */
     private static function validateGeneral(string $input): string
     {
-        // Basic sanitization
+        // Базовая санитизация
         $input = htmlspecialchars($input, ENT_QUOTES, 'UTF-8');
         
-        // Limit length
+        // Ограничиваем длину
         if (strlen($input) > 500) {
             $input = substr($input, 0, 500);
         }
@@ -141,7 +141,7 @@ class SecurityService
     }
 
     /**
-     * Check for brute force attempts
+     * Проверяет попытки брутфорса
      */
     public static function checkBruteForce(string $identifier, string $type = 'auth'): bool
     {
@@ -167,7 +167,7 @@ class SecurityService
     }
 
     /**
-     * Increment brute force counter
+     * Увеличивает счётчик брутфорса
      */
     public static function incrementBruteForce(string $identifier, string $type = 'auth'): void
     {
@@ -177,7 +177,7 @@ class SecurityService
     }
 
     /**
-     * Reset brute force counter
+     * Сбрасывает счётчик брутфорса
      */
     public static function resetBruteForce(string $identifier, string $type = 'auth'): void
     {
@@ -186,7 +186,7 @@ class SecurityService
     }
 
     /**
-     * Generate secure random string
+     * Генерирует безопасную случайную строку
      */
     public static function generateSecureString(int $length = 32): string
     {
@@ -194,7 +194,7 @@ class SecurityService
     }
 
     /**
-     * Log security event
+     * Логирует событие безопасности
      */
     public static function logSecurityEvent(string $event, array $data = []): void
     {

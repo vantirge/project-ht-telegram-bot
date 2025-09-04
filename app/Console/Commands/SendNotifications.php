@@ -15,7 +15,7 @@ use Illuminate\Support\Facades\Log;
 class SendNotifications extends Command
 {
     protected $signature = 'notifications:send';
-    protected $description = 'Отправить все неотправленные уведомления';
+    protected $description = 'Отправить все неотправленные уведомления пользователям';
 
     protected Api $telegram;
 
